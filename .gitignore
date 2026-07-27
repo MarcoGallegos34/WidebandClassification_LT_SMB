@@ -3,4 +3,4 @@
 .RData
 .Ruserdata
 .DS_Store
-training_output_*
+*training_output_*.rds
