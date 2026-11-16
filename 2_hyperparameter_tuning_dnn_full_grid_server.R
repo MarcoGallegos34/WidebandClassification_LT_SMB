@@ -29,6 +29,9 @@ model_id = opt$model
 include_cw = opt$class_weights == "y"
 include_callbacks = opt$callbacks == "y"
 debug_mode = opt$debugging == "y"
+
+Sys.setenv(UV_OFFLINE=1)
+
 # Hyperparameter tuning of thee and four hidden layer DNN
 
 ## ---- Libraries ----
@@ -53,19 +56,22 @@ x_train = readRDS("Data/x_train.rds")
 dummy_y_val = readRDS("Data/dummy_y_val.rds")
 dummy_y_train = readRDS("Data/dummy_y_train.rds")
 
+cnn_class_weights = NULL
 if(include_cw){
   ## Do this for 1:10 then 11:20 because it takes too long on its own
-  cw<-summary(as.factor(dummy_y_train[,1]))[2]/summary(as.factor(dummy_y_train[,1]))[1]
+  cw<-2.15867
+  cnn_class_weights = list("0"=1,"1"=cw)
 }
 
+cnn_callbacks = NULL
 if(include_callbacks){
   # for implementing early stopping
-  callbacks <- list(
+  cnn_callbacks <- list(
     callback_early_stopping(
       monitor = "val_loss",
       min_delta = 1e-2,
-      patience = 15,
-      restore_best_weights = TRUE
+      patience = 50#,
+      # restore_best_weights = TRUE
     )
   )
 }
@@ -73,15 +79,17 @@ if(include_callbacks){
 # for using legacy optimizers which work better with newer Macs
 optimizers <- keras3::keras$optimizers # change here
 
-## ---- Create grid of all the hyperparameters for 4 hidden layers ----
-regrate<-c(1e-6,1e-5,1e-4)
-dropout<-c(0,0.1,0.15,0.2)
-neuron1<-c(128,96,64)
-neuron2<-c(64,48,32)
-neuron3<-c(32,24,16)
-neuron4<-c(16,8,4)
+# ## ---- Create grid of all the hyperparameters for 4 hidden layers ----
+# regrate<-c(1e-6,1e-5,1e-4)
+# dropout<-c(0,0.1,0.15,0.2)
+# neuron1<-c(128,96,64)
+# neuron2<-c(64,48,32)
+# neuron3<-c(32,24,16)
+# neuron4<-c(16,8,4)
+# 
+# grid.search.full<-expand.grid(regrate=regrate,dropout=dropout,neuron1=neuron1,neuron2=neuron2,neuron3=neuron3,neuron4=neuron4)
 
-grid.search.full<-expand.grid(regrate=regrate,dropout=dropout,neuron1=neuron1,neuron2=neuron2,neuron3=neuron3,neuron4=neuron4)
+grid.search.full = readRDS("1d_structured_networks/dnn/grid.search.full.rds")
 
 ## ---- Take 20 models to search through (4 hidden layers) ----
 # set.seed(15)
@@ -126,9 +134,9 @@ history <- model1 %>% fit(
   x_train, dummy_y_train,
   batch_size = 500,
   epochs = 125,
-  validation_data = list(x_validate,dummy_y_val)#,
-  # class_weight = list("0"=1,"1"=cw),
-  # callbacks = callbacks
+  validation_data = list(x_validate,dummy_y_val),
+  class_weight = cnn_class_weights,
+  callbacks = cnn_callbacks
 )
 
 val_loss_4layer[1]<-min(history$metrics$val_loss)
@@ -137,217 +145,21 @@ val_auc_4layer[1]<-history$metrics$val_auc[best_epoch_4layer[1]]
 
 final_output = c(val_loss_4layer,best_epoch_4layer,val_auc_4layer,model_id)
 
-saveRDS(final_output,file = paste0("1d_structured_networks/dnn/training_metrics/training_output_",model_id,".rds"))
+fit_cw = ""
+if(include_cw){
+  fit_cw = "_cw"
+}
+
+fit_callbacks = ""
+if(include_callbacks){
+  fit_callbacks = "_callback"
+}  
+
+nbatch = (model_id-1)%/%100000 + 1
+saveRDS(final_output,file = paste0("1d_structured_networks/dnn/training_metrics",fit_cw,fit_callbacks,"_b",nbatch,"/training_output_",model_id,".rds"))
+
+print(paste0("include class_weights: ",include_cw))
+print(paste0("include callback: ", include_callbacks))
 
 print(paste0("training metrics for model with parameter configuration ",model_id," ready!"))
-
-# ## Do this for 1:10 then 11:20 because it takes too long on its own
-# t1 <- Sys.time()
-# for(i in 100:300){
-#   print(sprintf("Processing Model #%d", i))
-#     set_random_seed(15)
-#     model1 <- keras_model_sequential(input_shape = c(249)) # change here
-#     model1 %>%
-#       layer_dense(units = grid.search.full$neuron1[i], activity_regularizer = regularizer_l2(l=grid.search.full$regrate[i])) %>%
-#       layer_activation_leaky_relu()%>%
-#       layer_dropout(grid.search.full$dropout[i])%>%
-#       layer_dense(units = grid.search.full$neuron2[i],activity_regularizer = regularizer_l2(l=grid.search.full$regrate[i])) %>%
-#       layer_activation_leaky_relu()%>%
-#       layer_dropout(grid.search.full$dropout[i])%>%
-#       layer_dense(units = grid.search.full$neuron3[i],activity_regularizer = regularizer_l2(l=grid.search.full$regrate[i])) %>%
-#       layer_activation_leaky_relu()%>%
-#       layer_dropout(grid.search.full$dropout[i])%>%
-#       layer_dense(units = grid.search.full$neuron4[i],activity_regularizer = regularizer_l2(l=grid.search.full$regrate[i])) %>%
-#       layer_activation_leaky_relu()%>%
-#       layer_dense(units = 2, activation = "sigmoid")
-# 
-#     model1 %>% compile(
-#       loss = 'binary_crossentropy',
-#       optimizer =  optimizer_adam(3e-4), # change here
-#       metrics = c("accuracy", tf$keras$metrics$AUC()))
-# 
-#     history <- model1 %>% fit(
-#       x_train, dummy_y_train,
-#       batch_size = 500,
-#       epochs = 125,
-#       validation_data = list(x_validate,dummy_y_val)#,
-#       # class_weight = list("0"=1,"1"=cw),
-#       # callbacks = callbacks
-#       )
-# 
-#     val_loss_4layer[i]<-min(history$metrics$val_loss)
-#     best_epoch_4layer[i]<-which(history$metrics$val_loss==min(history$metrics$val_loss))
-#     val_auc_4layer[i]<-history$metrics$val_auc[best_epoch_4layer[i]]
-# 
-#   }
-# t2 <- Sys.time()
-# t2 - t1
-
-# t1 <- Sys.time()
-# for(i in 301:450){
-#   print(sprintf("Processing Model #%d", i))
-#   set_random_seed(15)
-#   model1 <- keras_model_sequential(input_shape = c(249)) # change here
-#   model1 %>%
-#     layer_dense(units = grid.search.subset$neuron1[i], activity_regularizer = regularizer_l2(l=grid.search.subset$regrate[i])) %>%
-#     layer_activation_leaky_relu()%>%
-#     layer_dropout(grid.search.subset$dropout[i])%>%
-#     layer_dense(units = grid.search.subset$neuron2[i],activity_regularizer = regularizer_l2(l=grid.search.subset$regrate[i])) %>%
-#     layer_activation_leaky_relu()%>%
-#     layer_dropout(grid.search.subset$dropout[i])%>%
-#     layer_dense(units = grid.search.subset$neuron3[i],activity_regularizer = regularizer_l2(l=grid.search.subset$regrate[i])) %>%
-#     layer_activation_leaky_relu()%>%
-#     layer_dropout(grid.search.subset$dropout[i])%>%
-#     layer_dense(units = grid.search.subset$neuron4[i],activity_regularizer = regularizer_l2(l=grid.search.subset$regrate[i])) %>%
-#     layer_activation_leaky_relu()%>%
-#     layer_dense(units = 2, activation = "sigmoid")
-# 
-#   model1 %>% compile(
-#     loss = 'binary_crossentropy',
-#     optimizer =  optimizer_adam(3e-4), # change here
-#     metrics = c("accuracy", tf$keras$metrics$AUC()))
-# 
-#   history <- model1 %>% fit(
-#     x_train, dummy_y_train,
-#     batch_size = 500,
-#     epochs = 125,
-#     validation_data = list(x_validate,dummy_y_val)#,
-#     # class_weight = list("0"=1,"1"=cw),
-#     # callbacks = callbacks
-#     )
-# 
-#   val_loss_4layer[i]<-min(history$metrics$val_loss)
-#   best_epoch_4layer[i]<-which(history$metrics$val_loss==min(history$metrics$val_loss))
-#   val_auc_4layer[i]<-history$metrics$val_auc[best_epoch_4layer[i]]
-# 
-# }
-# t2 <- Sys.time()
-# t2 - t1
-# 
-# t1 <- Sys.time()
-# for(i in 451:600){
-#   print(sprintf("Processing Model #%d", i))
-#   set_random_seed(15)
-#   model1 <- keras_model_sequential(input_shape = c(249)) # change here
-#   model1 %>%
-#     layer_dense(units = grid.search.subset$neuron1[i], activity_regularizer = regularizer_l2(l=grid.search.subset$regrate[i])) %>%
-#     layer_activation_leaky_relu()%>%
-#     layer_dropout(grid.search.subset$dropout[i])%>%
-#     layer_dense(units = grid.search.subset$neuron2[i],activity_regularizer = regularizer_l2(l=grid.search.subset$regrate[i])) %>%
-#     layer_activation_leaky_relu()%>%
-#     layer_dropout(grid.search.subset$dropout[i])%>%
-#     layer_dense(units = grid.search.subset$neuron3[i],activity_regularizer = regularizer_l2(l=grid.search.subset$regrate[i])) %>%
-#     layer_activation_leaky_relu()%>%
-#     layer_dropout(grid.search.subset$dropout[i])%>%
-#     layer_dense(units = grid.search.subset$neuron4[i],activity_regularizer = regularizer_l2(l=grid.search.subset$regrate[i])) %>%
-#     layer_activation_leaky_relu()%>%
-#     layer_dense(units = 2, activation = "sigmoid")
-# 
-#   model1 %>% compile(
-#     loss = 'binary_crossentropy',
-#     optimizer =  optimizer_adam(3e-4), # change here
-#     metrics = c("accuracy", tf$keras$metrics$AUC()))
-# 
-#   history <- model1 %>% fit(
-#     x_train, dummy_y_train,
-#     batch_size = 500,
-#     epochs = 125,
-#     validation_data = list(x_validate,dummy_y_val)#,
-#     # class_weight = list("0"=1,"1"=cw),
-#     # callbacks = callbacks
-#     )
-# 
-#   val_loss_4layer[i]<-min(history$metrics$val_loss)
-#   best_epoch_4layer[i]<-which(history$metrics$val_loss==min(history$metrics$val_loss))
-#   val_auc_4layer[i]<-history$metrics$val_auc[best_epoch_4layer[i]]
-# 
-# }
-# t2 <- Sys.time()
-# t2 - t1
-# 
-# t1 <- Sys.time()
-# for(i in 601:873){
-#   print(sprintf("Processing Model #%d", i))
-#   set_random_seed(15)
-#   model1 <- keras_model_sequential(input_shape = c(249)) # change here
-#   model1 %>%
-#     layer_dense(units = grid.search.subset$neuron1[i], activity_regularizer = regularizer_l2(l=grid.search.subset$regrate[i])) %>%
-#     layer_activation_leaky_relu()%>%
-#     layer_dropout(grid.search.subset$dropout[i])%>%
-#     layer_dense(units = grid.search.subset$neuron2[i],activity_regularizer = regularizer_l2(l=grid.search.subset$regrate[i])) %>%
-#     layer_activation_leaky_relu()%>%
-#     layer_dropout(grid.search.subset$dropout[i])%>%
-#     layer_dense(units = grid.search.subset$neuron3[i],activity_regularizer = regularizer_l2(l=grid.search.subset$regrate[i])) %>%
-#     layer_activation_leaky_relu()%>%
-#     layer_dropout(grid.search.subset$dropout[i])%>%
-#     layer_dense(units = grid.search.subset$neuron4[i],activity_regularizer = regularizer_l2(l=grid.search.subset$regrate[i])) %>%
-#     layer_activation_leaky_relu()%>%
-#     layer_dense(units = 2, activation = "sigmoid")
-# 
-#   model1 %>% compile(
-#     loss = 'binary_crossentropy',
-#     optimizer =  optimizer_adam(3e-4), # change here
-#     metrics = c("accuracy", tf$keras$metrics$AUC()))
-# 
-#   history <- model1 %>% fit(
-#     x_train, dummy_y_train,
-#     batch_size = 500,
-#     epochs = 125,
-#     validation_data = list(x_validate,dummy_y_val)#,
-#     # class_weight = list("0"=1,"1"=cw),
-#     # callbacks = callbacks
-#     )
-# 
-#   val_loss_4layer[i]<-min(history$metrics$val_loss)
-#   best_epoch_4layer[i]<-which(history$metrics$val_loss==min(history$metrics$val_loss))
-#   val_auc_4layer[i]<-history$metrics$val_auc[best_epoch_4layer[i]]
-# 
-# }
-# t2 <- Sys.time()
-# t2 - t1
-# 
-# t1 <- Sys.time()
-# for(i in 874:nrow(grid.search.subset)){
-#   print(sprintf("Processing Model #%d", i))
-#   set_random_seed(15)
-#   model1 <- keras_model_sequential(input_shape = c(249)) # change here
-#   model1 %>%
-#     layer_dense(units = grid.search.subset$neuron1[i], activity_regularizer = regularizer_l2(l=grid.search.subset$regrate[i])) %>%
-#     layer_activation_leaky_relu()%>%
-#     layer_dropout(grid.search.subset$dropout[i])%>%
-#     layer_dense(units = grid.search.subset$neuron2[i],activity_regularizer = regularizer_l2(l=grid.search.subset$regrate[i])) %>%
-#     layer_activation_leaky_relu()%>%
-#     layer_dropout(grid.search.subset$dropout[i])%>%
-#     layer_dense(units = grid.search.subset$neuron3[i],activity_regularizer = regularizer_l2(l=grid.search.subset$regrate[i])) %>%
-#     layer_activation_leaky_relu()%>%
-#     layer_dropout(grid.search.subset$dropout[i])%>%
-#     layer_dense(units = grid.search.subset$neuron4[i],activity_regularizer = regularizer_l2(l=grid.search.subset$regrate[i])) %>%
-#     layer_activation_leaky_relu()%>%
-#     layer_dense(units = 2, activation = "sigmoid")
-# 
-#   model1 %>% compile(
-#     loss = 'binary_crossentropy',
-#     optimizer =  optimizer_adam(3e-4), # change here
-#     metrics = c("accuracy", tf$keras$metrics$AUC()))
-# 
-#   history <- model1 %>% fit(
-#     x_train, dummy_y_train,
-#     batch_size = 500,
-#     epochs = 125,
-#     validation_data = list(x_validate,dummy_y_val)#,
-#     # class_weight = list("0"=1,"1"=cw),
-#     # callbacks = callbacks
-#     )
-# 
-#   val_loss_4layer[i]<-min(history$metrics$val_loss)
-#   best_epoch_4layer[i]<-which(history$metrics$val_loss==min(history$metrics$val_loss))
-#   val_auc_4layer[i]<-history$metrics$val_auc[best_epoch_4layer[i]]
-# 
-# }
-# t2 <- Sys.time()
-# t2 - t1
-
-# saveRDS(val_loss_4layer,file = "1D Structured Networks/Deep Neural Network/val_loss_4layer_allCombs.rds")
-# saveRDS(best_epoch_4layer,file = "1D Structured Networks/Deep Neural Network/best_epoch_4layer_allCombs.rds")
-# saveRDS(val_auc_4layer,file = "1D Structured Networks/Deep Neural Network/val_auc_4layer_allCombs.rds")
 
